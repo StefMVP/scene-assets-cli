@@ -45,6 +45,7 @@ Supply known license and author facts. Keep downloaded assets out of this reposi
 
 Fetch reruns verify the pinned cache without an API call. Changed files fail.
 Use a new destination for each selection. Import and sheet refuse existing outputs.
+An import locks its output path until the scene and receipt are saved.
 Only import trusted Blender files. Automatic script execution is disabled.
 The importer preserves source transforms and packs imported images. Keep the cache
 for assets with linked Blender libraries.

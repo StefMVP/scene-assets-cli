@@ -16,7 +16,7 @@ def run():
     manifest = json.loads(manifest_path.read_text())
     verify(manifest, manifest_path.parent)
     receipt = Path(str(output) + ".assets.json")
-    if output.exists() or receipt.exists():
+    if output.exists() or output.is_symlink() or receipt.exists() or receipt.is_symlink():
         raise ValueError("Output or asset receipt already exists")
     if not bpy.data.filepath:
         bpy.ops.object.select_all(action="SELECT")
@@ -108,7 +108,8 @@ def run():
     history.append(facts)
     scene["studio_assets"] = json.dumps(history, sort_keys=True)
     bpy.ops.wm.save_as_mainfile(filepath=str(output), check_existing=False)
-    receipt.write_text(json.dumps(history, indent=2, sort_keys=True) + "\n")
+    with receipt.open("x") as stream:
+        stream.write(json.dumps(history, indent=2, sort_keys=True) + "\n")
     print("STUDIO_ASSET_IMPORT " + json.dumps(facts, sort_keys=True))
 
 
