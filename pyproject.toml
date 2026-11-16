@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scene-assets-cli"
+version = "0.1.0"
+description = "Find, pin, compare, and import library assets into saved Blender scenes."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = []
+
+[project.scripts]
+scene-assets = "scene_assets.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["scene_assets"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

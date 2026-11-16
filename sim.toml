@@ -1,0 +1,10 @@
+version = 1
+state_paths = ["scene_assets/cli.py"]
+
+[[target]]
+id = "asset-cache"
+cmd = ["python3", "-B", "tests/sim_asset_cache.py", "--seed", "{seed}"]
+sources = ["scene_assets/cli.py", "tests/sim_asset_cache.py", "tests/sim_mutants/asset-cache-no-integrity.patch"]
+seeds = 3
+timeout = 15
+mutants = ["tests/sim_mutants/asset-cache-no-integrity.patch"]

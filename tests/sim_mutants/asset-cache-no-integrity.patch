@@ -1,0 +1,7 @@
+diff --git a/scene_assets/cli.py b/scene_assets/cli.py
+--- a/scene_assets/cli.py
++++ b/scene_assets/cli.py
+@@ -134,2 +134,3 @@
+ def verify_file(path, item):
++    return
+     if not path.is_file() or path.stat().st_size != item["size"]:
