@@ -9,7 +9,7 @@ description = "Find, pin, compare, and import library assets into saved Blender 
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license-files = ["LICENSE"]
 dependencies = []
 
 [project.scripts]

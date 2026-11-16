@@ -1,5 +1,0 @@
-Scene Assets CLI
-
-The asset CLI and Blender importer were added in the private Imagination Studio
-codebase under the Apache License, Version 2.0. This package extracts those
-additions and provides standalone package entry points.
