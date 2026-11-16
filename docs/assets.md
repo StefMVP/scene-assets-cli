@@ -52,7 +52,10 @@ A missing file downloads from its pinned URL. A changed file fails and remains u
 A partial fetch keeps its manifest so the same command can resume.
 Use a different destination for a different asset, resolution, format, or use.
 The CLI does not overwrite an existing scene or remove unrelated files.
-A `.asset-lock` file blocks concurrent writes to a cache. After a killed process, check that owner before removing the lock.
+A `.asset-lock` file blocks concurrent writes to a cache.
+An import holds `<output>.asset-lock` until Blender and the receipt finish.
+A second import to that output fails without starting Blender.
+After a killed process, confirm that no fetch or import still runs before you remove its lock.
 
 ## Take in a file from another source
 

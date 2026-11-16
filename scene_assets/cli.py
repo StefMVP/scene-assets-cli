@@ -222,13 +222,13 @@ def gltf_info(path, declared=None, name=None):
 
 
 @contextmanager
-def lock(root):
+def lock(root, filename=".asset-lock"):
     root.mkdir(parents=True, exist_ok=True)
-    lockfile = root / ".asset-lock"
+    lockfile = root / filename
     try:
         fd = os.open(lockfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError as error:
-        raise ValueError(f"Asset cache is locked: {lockfile}. Check the owner before removing the lock.") from error
+        raise ValueError(f"Asset destination is locked: {lockfile}. Check the owner before removing the lock.") from error
     try:
         with os.fdopen(fd, "w") as stream:
             stream.write(str(os.getpid()) + "\n")
@@ -455,27 +455,27 @@ def import_asset(args):
     if manifest["use"] == "reference-only":
         raise ValueError("A reference-only asset cannot be imported as scene content")
     output = args.output.expanduser().absolute()
-    if output.exists() or output.is_symlink():
-        raise ValueError(f"Output exists; choose a new scene path: {output}")
-    receipt = Path(str(output) + ".assets.json")
-    if receipt.exists() or receipt.is_symlink():
-        raise ValueError(f"Asset receipt exists; choose a new scene path: {receipt}")
-    if output.suffix.lower() != ".blend":
-        raise ValueError("Scene output must end in .blend")
-    if args.object and (not args.scene or manifest["kind"] != "material"):
-        raise ValueError("--object needs --scene and a material asset")
-    if args.scene and not args.scene.is_file():
-        raise ValueError(f"Scene does not exist: {args.scene}")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    script = Path(__file__).with_name("blender_import.py")
-    command = [args.blender, "--background", "--factory-startup", "--disable-autoexec"]
-    if args.scene:
-        command += [str(args.scene.resolve())]
-    command += ["--python-exit-code", "1", "--python", str(script), "--", str(manifest_path), str(output), args.object or ""]
-    subprocess.run(command, check=True, timeout=args.timeout, stdout=sys.stderr)
-    if not output.is_file():
-        raise ValueError("Blender returned without the scene file")
-    return {"scene": str(output), "facts": str(output) + ".assets.json"}
+    with lock(output.parent, output.name + ".asset-lock"):
+        if output.exists() or output.is_symlink():
+            raise ValueError(f"Output exists; choose a new scene path: {output}")
+        receipt = Path(str(output) + ".assets.json")
+        if receipt.exists() or receipt.is_symlink():
+            raise ValueError(f"Asset receipt exists; choose a new scene path: {receipt}")
+        if output.suffix.lower() != ".blend":
+            raise ValueError("Scene output must end in .blend")
+        if args.object and (not args.scene or manifest["kind"] != "material"):
+            raise ValueError("--object needs --scene and a material asset")
+        if args.scene and not args.scene.is_file():
+            raise ValueError(f"Scene does not exist: {args.scene}")
+        script = Path(__file__).with_name("blender_import.py")
+        command = [args.blender, "--background", "--factory-startup", "--disable-autoexec"]
+        if args.scene:
+            command += [str(args.scene.resolve())]
+        command += ["--python-exit-code", "1", "--python", str(script), "--", str(manifest_path), str(output), args.object or ""]
+        subprocess.run(command, check=True, timeout=args.timeout, stdout=sys.stderr)
+        if not output.is_file():
+            raise ValueError("Blender returned without the scene file")
+        return {"scene": str(output), "facts": str(output) + ".assets.json"}
 
 
 def esc(text):

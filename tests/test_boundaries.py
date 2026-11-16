@@ -131,3 +131,48 @@ def test_failed_nested_publication_removes_empty_new_directories(tmp_path, monke
     with pytest.raises(OSError, match="publication failure"):
         assets.intake(intake_args(source, dest, ["a/b/texture.png=" + str(dep)]))
     assert list(dest.iterdir()) == []
+
+
+def test_concurrent_imports_own_the_output_until_receipt_is_saved(tmp_path):
+    import os
+    source = tmp_path / "asset.blend"
+    source.write_bytes(b"trusted test data")
+    cache = tmp_path / "cache"
+    assets.intake(intake_args(source, cache))
+    backend = tmp_path / "blender-stand-in"
+    backend.write_text("#!" + sys.executable + "\n" + '''import json,os,select,sys
+from pathlib import Path
+manifest, output, obj = sys.argv[sys.argv.index("--") + 1:]
+output = Path(output)
+receipt = Path(str(output) + ".assets.json")
+if output.exists() or receipt.exists():
+    raise SystemExit(1)
+role = os.environ["IMPORT_ROLE"]
+if role == "first":
+    print("SAVE_BARRIER", flush=True)
+    if not select.select([sys.stdin], [], [], 10)[0]:
+        raise SystemExit(2)
+    sys.stdin.readline()
+output.write_text(role)
+with receipt.open("x") as stream:
+    json.dump({"owner": role}, stream)
+''')
+    backend.chmod(0o700)
+    output = tmp_path / "shared.blend"
+    command = [sys.executable, "-m", "scene_assets", "import", str(cache / "manifest.json"),
+               "--output", str(output), "--blender", str(backend)]
+    first = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, env={**os.environ, "IMPORT_ROLE": "first"})
+    try:
+        assert first.stderr.readline().strip() == "SAVE_BARRIER"
+        second = subprocess.run(command, capture_output=True, text=True, timeout=5,
+                                env={**os.environ, "IMPORT_ROLE": "second"})
+    finally:
+        stdout, stderr = first.communicate("\n", timeout=15)
+    assert second.returncode == 1, second.stdout + second.stderr
+    assert "locked" in second.stderr.lower()
+    assert first.returncode == 0, stdout + stderr
+    assert json.loads(stdout)["scene"] == str(output)
+    assert output.read_text() == "first"
+    assert json.loads(Path(str(output) + ".assets.json").read_text()) == {"owner": "first"}
+    assert not Path(str(output) + ".asset-lock").exists()
