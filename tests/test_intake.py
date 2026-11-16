@@ -168,6 +168,7 @@ def test_actual_blender_imports_glb_and_gltf(tmp_path, kind):
     result = subprocess.run(CLI + ["import", str(tmp_path / "cache/manifest.json"), "--output", str(output)],
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["scene"] == str(output)
     facts = json.loads(Path(str(output) + ".assets.json").read_text())[0]
     mesh = next(o for o in facts["objects"] if o["type"] == "MESH")
     assert [round(v, 3) for v in mesh["dimensions"]] == [2, 0.5, 1]  # glTF Y-up becomes Blender Z-up.

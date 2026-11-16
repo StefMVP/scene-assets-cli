@@ -13,8 +13,17 @@ import subprocess
 import sys
 import tempfile
 from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+class HTTPSRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urlsplit(newurl)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("Download redirect must use HTTPS without credentials")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+urlopen = build_opener(HTTPSRedirect()).open
 API = "https://api.polyhaven.com"
 USER_AGENT = "scene-assets-cli/0.1"
 KINDS = {0: "hdri", 1: "material", 2: "model"}
@@ -89,7 +98,7 @@ def validate(manifest):
         if item.get("url"):
             parsed = urlsplit(item["url"])
             if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-                raise ValueError(f"Expected a public HTTPS URL: {path}")
+                raise ValueError(f"Expected an HTTPS URL: {path}")
         elif not Path(item["source"]).is_absolute():
             raise ValueError(f"Local source must be absolute: {path}")
     entry = str(relative(manifest["entrypoint"]))
@@ -171,8 +180,13 @@ def gltf_json(path, name=None):
         doc = json.loads(text)
     except ValueError as error:
         raise ValueError(f"Corrupt glTF JSON: {name}") from error
-    if not isinstance(doc, dict) or not str(doc.get("asset", {}).get("version", "")).startswith("2"):
-        raise ValueError(f"Expected glTF 2.x: {name}")
+    if (not isinstance(doc, dict) or not isinstance(doc.get("asset"), dict)
+            or doc["asset"].get("version") != "2.0"):
+        raise ValueError(f"Expected glTF 2.0: {name}")
+    for field in ("buffers", "bufferViews", "images", "meshes", "accessors"):
+        entries = doc.get(field, [])
+        if not isinstance(entries, list) or any(not isinstance(e, dict) for e in entries):
+            raise ValueError(f"Invalid glTF {field}: expected an array of objects")
     return doc
 
 
@@ -181,9 +195,9 @@ def gltf_uris(doc):
             if isinstance(e, dict) and isinstance(e.get("uri"), str) and not e["uri"].startswith("data:")]
 
 
-def gltf_info(path, declared=None):
+def gltf_info(path, declared=None, name=None):
     """Check external dependencies against declared paths and return raw source facts."""
-    doc = gltf_json(path)
+    doc = gltf_json(path, name)
     for uri in gltf_uris(doc):
         if declared is not None and str(relative(unquote(uri))) not in declared:
             raise ValueError(f"Missing glTF dependency in manifest: {uri}")
@@ -245,11 +259,7 @@ def download(root, item):
     fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=".asset-")
     try:
         with os.fdopen(fd, "wb") as output:
-            if item.get("url"):
-                source = urlopen(Request(item["url"], headers={"User-Agent": USER_AGENT}), timeout=60)
-            else:
-                source = Path(item["source"]).open("rb")
-            with source:
+            with open_source(item.get("url") or item["source"]) as source:
                 remaining = item["size"]
                 while True:
                     block = source.read(min(1024 * 1024, remaining + 1))
@@ -267,11 +277,11 @@ def download(root, item):
 
 
 def open_source(source):
-    """Open a trusted local file or a public HTTPS URL for reading."""
+    """Open a trusted local file or an HTTPS URL for reading."""
     if source.startswith("https://"):
         parsed = urlsplit(source)
         if not parsed.hostname or parsed.username or parsed.password:
-            raise ValueError(f"Expected a public HTTPS URL: {source}")
+            raise ValueError(f"Expected an HTTPS URL: {source}")
         response = urlopen(Request(source, headers={"User-Agent": USER_AGENT}), timeout=60)
         if not response.geturl().startswith("https://"):
             response.close()
@@ -334,6 +344,8 @@ def intake(args):
         if (root / "manifest.json").exists() or (root / "manifest.json").is_symlink():
             raise ValueError("Destination already holds a manifest; choose a new destination")
         staged = {}  # path -> (temporary, size, sha256, origin)
+        published = []
+        created_dirs = []
         try:
             staged[name] = (*intake_copy(root, source, name, limit), source)
             facts = {}
@@ -365,18 +377,36 @@ def intake(args):
                         "license": args.license or "unspecified", "authors": dict.fromkeys(args.author or [], "Source"),
                         "resolution": "source", "format": suffix.lstrip("."), "entrypoint": name, "files": files}
             validate(manifest)
+            if suffix in (".glb", ".gltf"):
+                manifest["source_facts"] = {"gltf": gltf_info(staged[name][0], set(staged), name)}
             for rel, (temporary, *_rest) in staged.items():
                 inside(root, rel)  # refuses symlinks and escapes
                 if (root / rel).exists():
                     raise ValueError(f"Destination already holds {rel}; choose a new destination")
             for rel, (temporary, *_rest) in staged.items():
                 target = root / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
+                missing = []
+                parent = target.parent
+                while not parent.exists():
+                    missing.append(parent)
+                    parent = parent.parent
+                for parent in reversed(missing):
+                    parent.mkdir()
+                    created_dirs.append(parent)
                 os.link(temporary, target)
-            if suffix in (".glb", ".gltf"):
-                manifest["source_facts"] = {"gltf": gltf_info(root / name, set(staged))}
-            write_json(root / "manifest.json", manifest)
+                published.append((target, temporary.stat().st_ino))
             verify(manifest, root)
+            write_json(root / "manifest.json", manifest)
+        except BaseException:
+            for target, inode in reversed(published):
+                if not target.is_symlink() and target.exists() and target.stat().st_ino == inode:
+                    target.unlink()
+            for directory in reversed(created_dirs):
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+            raise
         finally:
             for temporary, *_rest in staged.values():
                 temporary.unlink(missing_ok=True)
@@ -427,6 +457,11 @@ def import_asset(args):
     output = args.output.expanduser().absolute()
     if output.exists() or output.is_symlink():
         raise ValueError(f"Output exists; choose a new scene path: {output}")
+    receipt = Path(str(output) + ".assets.json")
+    if receipt.exists() or receipt.is_symlink():
+        raise ValueError(f"Asset receipt exists; choose a new scene path: {receipt}")
+    if output.suffix.lower() != ".blend":
+        raise ValueError("Scene output must end in .blend")
     if args.object and (not args.scene or manifest["kind"] != "material"):
         raise ValueError("--object needs --scene and a material asset")
     if args.scene and not args.scene.is_file():
@@ -437,7 +472,7 @@ def import_asset(args):
     if args.scene:
         command += [str(args.scene.resolve())]
     command += ["--python-exit-code", "1", "--python", str(script), "--", str(manifest_path), str(output), args.object or ""]
-    subprocess.run(command, check=True, timeout=args.timeout)
+    subprocess.run(command, check=True, timeout=args.timeout, stdout=sys.stderr)
     if not output.is_file():
         raise ValueError("Blender returned without the scene file")
     return {"scene": str(output), "facts": str(output) + ".assets.json"}
@@ -502,7 +537,7 @@ def sheet(args):
     for n, card in enumerate(cards):
         x, y = n % columns * width, n // columns * height
         parts.append(f'<g transform="translate({x},{y})"><rect x="6" y="6" width="{width - 12}" height="{height - 12}" fill="#fff" stroke="#bbb"/>')
-        parts.append(f'<text x="16" y="28" font-size="15" font-weight="bold">{n + 1}. {esc(card["asset_id"])[:38]}</text>')
+        parts.append(f'<text x="16" y="28" font-size="15" font-weight="bold">{n + 1}. {esc(card["asset_id"][:38])}</text>')
         if card["preview"]:
             label, mime, data = card["preview"]
             parts.append(f'<image x="16" y="38" width="328" height="200" preserveAspectRatio="xMidYMid meet" href="data:{mime};base64,{base64.b64encode(data).decode()}"/>')
